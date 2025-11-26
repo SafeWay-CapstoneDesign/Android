@@ -63,7 +63,6 @@ class FindingDeviceFragment : Fragment() {
     }
 
     @RequiresApi(Build.VERSION_CODES.S)
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private fun requestBluetoothPermissions() {
         val permissions = arrayOf(
             Manifest.permission.BLUETOOTH_SCAN,
@@ -84,7 +83,6 @@ class FindingDeviceFragment : Fragment() {
         permissionLauncher.launch(permissions)
     }
 
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private fun initBluetoothConnection() {
         if (bluetoothAdapter == null) {
             if (isAdded) {
@@ -94,14 +92,22 @@ class FindingDeviceFragment : Fragment() {
         }
 
         if (!bluetoothAdapter.isEnabled) {
-            bluetoothAdapter.enable()
-            if (isAdded) {
-                Toast.makeText(requireContext(), "블루투스를 활성화합니다.", Toast.LENGTH_SHORT).show()
+            // 권한 체크 후 enable
+            if (ActivityCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
+                bluetoothAdapter.enable()
+                if (isAdded) {
+                    Toast.makeText(requireContext(), "블루투스를 활성화합니다.", Toast.LENGTH_SHORT).show()
+                }
             }
         }
 
         if (isAdded) {
             Toast.makeText(requireContext(), "페어링된 장치를 검색 중...", Toast.LENGTH_SHORT).show()
+        }
+
+        // 🔴 권한 체크 추가 (에러 해결)
+        if (ActivityCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            return
         }
 
         val pairedDevices: Set<BluetoothDevice>? = bluetoothAdapter.bondedDevices
@@ -124,9 +130,8 @@ class FindingDeviceFragment : Fragment() {
             if (!isTryingToConnect) return@Thread
 
             try {
-                if (ActivityCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_CONNECT)
-                    != PackageManager.PERMISSION_GRANTED
-                ) {
+                // 🔴 권한 체크 (필수: 스레드 내부에서 체크)
+                if (ActivityCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
                     if (isAdded) {
                         requireActivity().runOnUiThread {
                             Toast.makeText(requireContext(), "BLUETOOTH_CONNECT 권한이 없습니다.", Toast.LENGTH_LONG).show()
@@ -141,6 +146,7 @@ class FindingDeviceFragment : Fragment() {
                     }
                 }
 
+                // 권한 체크를 통과했으므로 안전하게 실행
                 bluetoothSocket = device.createRfcommSocketToServiceRecord(uuid)
                 bluetoothSocket?.connect()
                 BluetoothManager.socket = bluetoothSocket
@@ -150,19 +156,8 @@ class FindingDeviceFragment : Fragment() {
                         Toast.makeText(requireContext(), "연결 성공!", Toast.LENGTH_SHORT).show()
                         buttonSend?.isEnabled = true
 
-                        val bundle = Bundle().apply {
-                            putString("deviceName", serverDeviceName)
-                        }
-
-                        val fragment = FragmentHomeConnected().apply {
-                            arguments = bundle
-                        }
-
-                        requireActivity().supportFragmentManager.beginTransaction()
-                            .replace(R.id.main_container, fragment)
-                            .commit()
-
-                        (requireActivity() as MainActivity).updateToolbarTitle("연결된 기기")
+                        // MainActivity에 연결 성공 알림 (화면 교체 요청)
+                        (requireActivity() as? MainActivity)?.onDeviceConnected()
                     }
                 }
 
@@ -187,10 +182,9 @@ class FindingDeviceFragment : Fragment() {
                 } else if (isAdded) {
                     requireActivity().runOnUiThread {
                         Toast.makeText(requireContext(), "연결 재시도 횟수를 초과했습니다.", Toast.LENGTH_LONG).show()
-                        (requireActivity() as MainActivity).supportFragmentManager.beginTransaction()
-                            .replace(R.id.main_container, HomeFragment())
-                            .commit()
-                        (requireActivity() as MainActivity).updateToolbarTitle("SafeWay")
+
+                        // MainActivity에 연결 실패 알림 (기본 홈 복구 요청)
+                        (requireActivity() as? MainActivity)?.onDeviceConnectionFailed()
                     }
                 }
             }

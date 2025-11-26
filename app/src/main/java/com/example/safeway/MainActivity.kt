@@ -15,9 +15,9 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
-import com.example.safeway.databinding.ActivityMainBinding
+import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentManager
-
+import com.example.safeway.databinding.ActivityMainBinding
 
 class MainActivity : AppCompatActivity() {
     private val binding: ActivityMainBinding by lazy {
@@ -26,6 +26,18 @@ class MainActivity : AppCompatActivity() {
 
     private val serverDeviceName = "raspberrypi"
 
+    // 기본 홈 프래그먼트 저장 (연결 끊김 시 복구용)
+    private val defaultHomeFragment = HomeFragment()
+
+    // 프래그먼트 관리 맵
+    private val fragments: MutableMap<Int, Fragment> = mutableMapOf(
+        R.id.fragment_home to defaultHomeFragment,
+        R.id.fragment_share_location to LocationShareFragment(),
+        R.id.fragment_alert to AlertFragment(),
+        R.id.fragment_mypage to MypageFragment(),
+    )
+
+    private var currentFragmentId = R.id.fragment_home
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -51,9 +63,7 @@ class MainActivity : AppCompatActivity() {
 
         checkBluetoothConnection()
 
-        
-        //낙상 감지 서비스 실행
-        //sms 권한 체크
+        // 낙상 감지 서비스 실행 및 SMS 권한 체크
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS)
             != PackageManager.PERMISSION_GRANTED
         ) {
@@ -64,30 +74,18 @@ class MainActivity : AppCompatActivity() {
         startService(serviceIntent)
     }
 
-
-    // MainActivity.kt 내부에 추가
-    private val fragments = mutableMapOf(
-        R.id.fragment_home to HomeFragment(),
-        R.id.fragment_share_location to LocationShareFragment(),
-        R.id.fragment_alert to AlertFragment(),
-        R.id.fragment_mypage to MypageFragment(),
-    )
-
-
-    private var currentFragmentId = R.id.fragment_home
-
     private fun setBottomNavigationView() {
-        // 최초에 모든 프래그먼트 add (단, 하나만 show, 나머지는 hide)
         val transaction = supportFragmentManager.beginTransaction()
         fragments.forEach { (id, fragment) ->
-            transaction.add(R.id.main_container, fragment, id.toString())
+            if (!fragment.isAdded) {
+                transaction.add(R.id.main_container, fragment, id.toString())
+            }
             if (id != currentFragmentId) transaction.hide(fragment)
         }
         transaction.commit()
 
-
         binding.bottomNavigationView.setOnItemSelectedListener { item ->
-            // 🔥 FindingFragment 같은 임시 화면 제거
+            // FindingFragment 같은 임시 화면 제거
             supportFragmentManager.popBackStack(null, FragmentManager.POP_BACK_STACK_INCLUSIVE)
 
             val selectedFragment = fragments[item.itemId] ?: return@setOnItemSelectedListener false
@@ -102,7 +100,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             binding.toolbarTitle.text = when (item.itemId) {
-                R.id.fragment_home -> "SafeWay"
+                R.id.fragment_home -> if (selectedFragment is FragmentHomeConnected) "연결된 기기" else "SafeWay"
                 R.id.fragment_share_location -> "위치 및 길안내"
                 R.id.fragment_alert -> "알림"
                 R.id.fragment_mypage -> "마이페이지"
@@ -111,11 +109,9 @@ class MainActivity : AppCompatActivity() {
 
             true
         }
-
     }
 
     // 블루투스 연결 상태 확인
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private fun checkBluetoothConnection() {
         val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         val bluetoothAdapter = bluetoothManager.adapter
@@ -127,10 +123,15 @@ class MainActivity : AppCompatActivity() {
 
         if (!bluetoothAdapter.isEnabled) {
             if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-                // 권한 요청이 필요한 경우 처리
+                // 권한이 없으면 여기서 리턴 (onCreate 등에서 권한 요청 필요)
                 return
             }
             bluetoothAdapter.enable()
+        }
+
+        // 🔴 권한 체크 추가 (에러 해결)
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            return
         }
 
         // ✅ 등록된(페어링된) 기기 목록 확인
@@ -151,21 +152,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-//    // 특정 기기가 연결된 경우, connected 프래그먼트 표시
-//    private fun showConnectedFragment() {
-//        // Bundle로 targetDeviceName 전달
-//        val bundle = Bundle().apply {
-//            putString("deviceName", serverDeviceName)
-//        }
-//
-//        val fragment = FragmentHomeConnected().apply {
-//            arguments = bundle
-//        }
-//        supportFragmentManager.beginTransaction().replace(R.id.main_container, fragment).commit()
-//        binding.toolbarTitle.text = "연결된 기기"
-//    }
-
-    // 기본 HomeFragment 표시
     private fun showHomeFragment() {
         val currentFragment = fragments[currentFragmentId] ?: return
         val homeFragment = fragments[R.id.fragment_home] ?: return
@@ -182,21 +168,54 @@ class MainActivity : AppCompatActivity() {
     private fun showFindingFragment() {
         supportFragmentManager.beginTransaction()
             .replace(R.id.main_container, FindingDeviceFragment())
-            .addToBackStack(null) // 🔁 뒤로가기 가능하게 백스택 추가
+            .addToBackStack(null)
             .commit()
 
         updateToolbarTitle("기기 검색 중")
     }
 
-
-
-
-    // MainActivity.kt
     fun updateToolbarTitle(title: String) {
         binding.toolbarTitle.text = title
     }
 
+    // ✅ FindingDeviceFragment에서 호출: 연결 성공 시 화면 교체
+    fun onDeviceConnected() {
+        supportFragmentManager.popBackStack(null, FragmentManager.POP_BACK_STACK_INCLUSIVE)
 
+        val connectedFragment = FragmentHomeConnected().apply {
+            arguments = Bundle().apply {
+                putString("deviceName", serverDeviceName)
+            }
+        }
 
+        val transaction = supportFragmentManager.beginTransaction()
 
+        // 1. 기존 홈 숨기기
+        fragments[R.id.fragment_home]?.let { transaction.hide(it) }
+
+        // 2. 맵 교체 (이제 홈 탭은 연결된 프래그먼트가 담당)
+        fragments[R.id.fragment_home] = connectedFragment
+
+        // 3. 화면 표시
+        transaction.add(R.id.main_container, connectedFragment)
+        transaction.commitNow()
+
+        currentFragmentId = R.id.fragment_home
+        updateToolbarTitle("연결된 기기")
+
+        // 바텀 네비게이션 상태 동기화
+        binding.bottomNavigationView.menu.findItem(R.id.fragment_home).isChecked = true
+    }
+
+    // ✅ FindingDeviceFragment에서 호출: 연결 실패 시 기본 홈으로 복구
+    fun onDeviceConnectionFailed() {
+        supportFragmentManager.popBackStack(null, FragmentManager.POP_BACK_STACK_INCLUSIVE)
+
+        // 맵을 기본 홈으로 복구 (혹시 변경되어 있었다면)
+        if (fragments[R.id.fragment_home] != defaultHomeFragment) {
+            fragments[R.id.fragment_home] = defaultHomeFragment
+        }
+
+        showHomeFragment()
+    }
 }
